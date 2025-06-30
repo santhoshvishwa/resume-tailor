@@ -3,3 +3,4 @@ openai
 selenium
 pyngrok
 webdriver-manager
+gunicorn
