@@ -7,8 +7,8 @@ from webdriver_manager.chrome import ChromeDriverManager
 from werkzeug.utils import secure_filename
 from pyngrok import ngrok
 
-# — CONFIG —
-openai.api_key = os.getenv("OPENAI_API_KEY", "<PASTE_YOUR_KEY_HERE>")
+# ─── CONFIG ─────────────────────────────────────────────────────────────
+openai.api_key = os.getenv("OPENAI_API_KEY")
 NGROK_TOKEN    = os.getenv("NGROK_AUTH_TOKEN", None)
 if NGROK_TOKEN:
     ngrok.set_auth_token(NGROK_TOKEN)
@@ -52,40 +52,55 @@ def automate_submission(app_url, filepath):
 
 @app.route("/", methods=["GET","POST"])
 def home():
-    if request.method=="POST":
-        resume = request.files["resume"]
-        jd     = request.files["jd"]
-        url    = request.form["app_url"].strip()
-        if not (resume and allowed_file(resume.filename)) or not (jd and allowed_file(jd.filename)):
-            return "Invalid file type", 400
+    if request.method == "POST":
+        # handle resume upload
+        resume = request.files.get("resume")
+        jd_text = request.form.get("jd_text", "").strip()
+        app_url = request.form.get("app_url", "").strip()
 
-        rfn, jfn = secure_filename(resume.filename), secure_filename(jd.filename)
-        rpath, jpath = os.path.join(UPLOAD_FOLDER,rfn), os.path.join(UPLOAD_FOLDER,jfn)
-        resume.save(rpath); jd.save(jpath)
+        if not (resume and allowed_file(resume.filename)):
+            return "❌ Invalid resume file type", 400
+        if not jd_text:
+            return "❌ Job description is required", 400
 
-        with open(rpath,"r",errors="ignore") as f: resume_text = f.read()
-        with open(jpath,"r",errors="ignore") as f: jd_text     = f.read()
+        # save resume
+        rfn   = secure_filename(resume.filename)
+        rpath = os.path.join(app.config["UPLOAD_FOLDER"], rfn)
+        resume.save(rpath)
 
+        # read resume text
+        with open(rpath, "r", errors="ignore") as f:
+            resume_text = f.read()
+
+        # tailor
         tailored = tailor_resume(resume_text, jd_text)
-        tfname   = "tailored_resume.txt"
-        tpath    = os.path.join(UPLOAD_FOLDER, tfname)
-        with open(tpath,"w",encoding="utf-8") as f: f.write(tailored)
 
-        return render_template("result.html", tailored_file=tfname, app_url=url)
+        # write out tailored version
+        tfname = "tailored_resume.txt"
+        tpath  = os.path.join(app.config["UPLOAD_FOLDER"], tfname)
+        with open(tpath, "w", encoding="utf-8") as f:
+            f.write(tailored)
+
+        return render_template("result.html",
+                               tailored_file=tfname,
+                               app_url=app_url)
+
     return render_template("index.html")
 
 @app.route("/download/<filename>")
 def download(filename):
-    return send_file(os.path.join(UPLOAD_FOLDER,filename), as_attachment=True)
+    return send_file(os.path.join(app.config["UPLOAD_FOLDER"], filename),
+                     as_attachment=True)
 
 @app.route("/submit", methods=["POST"])
 def submit():
-    tf   = request.form["tailored_file"]
-    url  = request.form["app_url"]
-    automate_submission(url, os.path.join(UPLOAD_FOLDER, tf))
+    tf      = request.form["tailored_file"]
+    app_url = request.form["app_url"]
+    filepath= os.path.join(app.config["UPLOAD_FOLDER"], tf)
+    automate_submission(app_url, filepath)
     return "✅ Resume submitted successfully!"
 
-if __name__=="__main__":
+if __name__ == "__main__":
     public_url = ngrok.connect(5000)
-    print(" * Public URL:", public_url)
+    print(f" * Public URL: {public_url}")
     app.run(port=5000)
