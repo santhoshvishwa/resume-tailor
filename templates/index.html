@@ -2,12 +2,19 @@
 <html>
   <head><title>Tailor & Submit</title></head>
   <body>
-    <h2>Step 1: Upload Resume & JD</h2>
+    <h2>Step 1: Upload Resume & Paste JD</h2>
     <form method="post" enctype="multipart/form-data">
       <p>
-        <label>Resume: <input type="file" name="resume" required></label><br>
-        <label>Job Description: <input type="file" name="jd" required></label><br>
-        <label>Application URL: <input type="url" name="app_url" placeholder="https://apply.here" required></label>
+        <label>Resume file: <input type="file" name="resume" required></label><br><br>
+
+        <label>Job Description:</label><br>
+        <textarea name="jd_text" rows="8" cols="60"
+                  placeholder="Paste the job description here…" required></textarea><br><br>
+
+        <label>Application URL: 
+          <input type="url" name="app_url"
+                 placeholder="https://apply.here" required>
+        </label>
       </p>
       <button type="submit">Tailor Resume →</button>
     </form>
