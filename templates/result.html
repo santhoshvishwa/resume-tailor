@@ -1,8 +1,8 @@
 <!doctype html>
 <html>
-  <head><title>Done</title></head>
+  <head><title>Tailored Resume Ready</title></head>
   <body>
-    <h2>Your tailored resume is ready.</h2>
+    <h2>Your tailored resume is ready:</h2>
     <a href="{{ url_for('download', filename=tailored_file) }}">Download tailored resume</a>
     <form method="post" action="{{ url_for('submit') }}">
       <input type="hidden" name="tailored_file" value="{{ tailored_file }}">
