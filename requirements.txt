@@ -1,7 +1,4 @@
 flask
 openai
-selenium
-webdriver-manager
 python-docx
-pyngrok
 gunicorn
