@@ -1,200 +1,266 @@
+from flask import Flask, render_template, request, jsonify, send_file
 import os
-from flask import Flask, request, render_template, send_file, redirect, url_for, flash
 import openai
-from openai import RateLimitError
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
 from docx import Document
+import tempfile
+import io
+from datetime import datetime
+import re
+import json
+import uuid
 from werkzeug.utils import secure_filename
-from pyngrok import ngrok
-
-# ─── CONFIG ─────────────────────────────────────────────────────────────
-openai.api_key = os.getenv("OPENAI_API_KEY")
-if token := os.getenv("NGROK_AUTH_TOKEN"):
-    ngrok.set_auth_token(token)
-
-UPLOAD_FOLDER = "uploads"
-ALLOWED_EXTS  = {"pdf", "docx", "txt"}
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-me")
-app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key-change-this')
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
-def allowed_file(fname):
-    return "." in fname and fname.rsplit(".",1)[1].lower() in ALLOWED_EXTS
+# Configure OpenAI
+openai.api_key = os.environ.get('OPENAI_API_KEY')
 
+# File upload configuration
+UPLOAD_FOLDER = 'uploads'
+ALLOWED_EXTENSIONS = {'docx', 'txt'}
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-def extract_text(path):
-    ext = path.rsplit(".",1)[1].lower()
-    if ext == "docx":
-        doc = Document(path)
-        return "\n".join(p.text for p in doc.paragraphs)
-    with open(path, "r", errors="ignore") as f:
-        return f.read()
+# Create upload directory if it doesn't exist
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# Error handler for OpenAI rate limits
-@app.errorhandler(RateLimitError)
-def handle_rate_limit(e):
-    flash('❌ OpenAI API quota exceeded. Please check your billing or use another API key.')
-    return redirect(url_for('index'))
+def extract_text_from_docx(file_path):
+    """Extract text content from a .docx file"""
+    try:
+        doc = Document(file_path)
+        text = []
+        for paragraph in doc.paragraphs:
+            text.append(paragraph.text)
+        return '\n'.join(text)
+    except Exception as e:
+        print(f"Error reading docx file: {e}")
+        return None
 
-# ─── STEP 1: LazyApply job search ─────────────────────────────────────────
-def lazyapply_search(email, password, keywords):
-    opts = Options()
-    opts.add_argument("--headless")
-    opts.add_argument("--no-sandbox")
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=opts)
-    driver.get("https://app.lazyapply.com/login")
-    # —— TODO: fill in your login & search logic —— #
-    jobs = []
-    driver.quit()
-    return jobs
+def extract_text_from_txt(file_path):
+    """Extract text content from a .txt file"""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            return file.read()
+    except Exception as e:
+        print(f"Error reading txt file: {e}")
+        return None
 
+def create_tailoring_prompt(resume_text, job_description):
+    """Create a comprehensive prompt for resume tailoring"""
+    prompt = f"""
+You are an expert resume writer and ATS optimization specialist. Please rewrite the following resume to be perfectly tailored for the job description provided. Follow these guidelines:
 
-def get_job_description(job_url):
-    opts = Options()
-    opts.add_argument("--headless")
-    opts.add_argument("--no-sandbox")
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=opts)
-    driver.get(job_url)
-    jd = driver.find_element(By.CSS_SELECTOR, "div.job-description").text
-    driver.quit()
-    return jd
+1. KEYWORD OPTIMIZATION:
+   - Identify key skills, technologies, and requirements from the job description
+   - Naturally incorporate these keywords throughout the resume
+   - Ensure keyword density is appropriate for ATS systems
 
+2. SUMMARY/OBJECTIVE REWRITE:
+   - Rewrite the professional summary to directly address the job requirements
+   - Highlight the most relevant experience and skills
+   - Use compelling language that matches the job posting tone
 
-# ─── STEP 2: Jobalytics-style analysis + bullet generation ────────────────
-def find_missing_keywords(resume_text, jd_text):
-    prompt = (
-        "You are an ATS optimization assistant.\n\n"
-        "Resume:\n" + resume_text + "\n\n"
-        "Job Description:\n" + jd_text + "\n\n"
-        "List, comma-separated, the keywords in the JD that are missing from the resume."
-    )
-    resp = openai.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role":"user","content":prompt}],
-        temperature=0.0,
-        max_tokens=200
-    )
-    return [k.strip() for k in resp.choices[0].message.content.split(",") if k.strip()]
+3. EXPERIENCE ENHANCEMENT:
+   - Reorder and rewrite bullet points to emphasize relevant experience
+   - Use strong action verbs and quantify achievements where possible
+   - Focus on accomplishments that align with job requirements
 
+4. SKILLS OPTIMIZATION:
+   - Prioritize technical and soft skills mentioned in the job description
+   - Remove irrelevant skills that don't match the position
+   - Add any missing relevant skills the candidate likely has
 
-def generate_bullet(missing):
-    kws = ", ".join(missing)
-    prompt = f"Write one concise, impact-oriented resume bullet that uses these keywords: {kws}."
-    resp = openai.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role":"user","content":prompt}],
-        temperature=0.2,
-        max_tokens=60
-    )
-    return resp.choices[0].message.content.strip()
+5. ATS FORMATTING:
+   - Use standard section headers (Experience, Education, Skills, etc.)
+   - Avoid complex formatting, tables, or graphics
+   - Use consistent bullet points and formatting
 
+6. MAINTAIN AUTHENTICITY:
+   - Keep all information truthful and accurate
+   - Don't add experience or skills the candidate doesn't have
+   - Preserve the candidate's voice and career progression
 
-# ─── STEP 3: Tailor & Submit ───────────────────────────────────────────────
-def tailor_resume(resume_text, jd_text):
-    prompt = (
-        "You are a resume optimization assistant.\n\n"
-        "Resume:\n" + resume_text + "\n\n"
-        "Job Description:\n" + jd_text + "\n\n"
-        "Generate a concise, tailored resume highlighting only the skills, tools, "
-        "and achievements most relevant to the JD."
-    )
-    resp = openai.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role":"user","content":prompt}],
-        temperature=0.2,
-        max_tokens=1500
-    )
-    return resp.choices[0].message.content
+JOB DESCRIPTION:
+{job_description}
 
+ORIGINAL RESUME:
+{resume_text}
 
-def automate_submission(app_url, filepath):
-    opts = Options()
-    opts.add_argument("--headless")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=opts)
-    wait = WebDriverWait(driver, 15)
-    driver.get(app_url)
+Please provide the tailored resume in a clean, professional format that will perform well in ATS systems. Return only the optimized resume content without any additional commentary.
+"""
+    return prompt
 
-    if "linkedin.com/jobs" in app_url:
-        ea = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR,
-            "button[data-control-name*='easy_apply']")))
-        ea.click()
-        up = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR,
-            "input[type='file']")))
-        up.send_keys(os.path.abspath(filepath))
-        while True:
-            try:
-                submit_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR,
-                    "button[aria-label='Submit application'],button[data-control-name='submit_unify']")))
-                submit_btn.click()
-                break
-            except:
-                nxt = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR,
-                    "button[aria-label='Continue to next step'],button[aria-label='Next']")))
-                nxt.click()
-    else:
-        fld = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR,
-            "input[type='file']")))
-        fld.send_keys(os.path.abspath(filepath))
-        btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR,
-            "button[type='submit']")))
-        btn.click()
+def call_openai_api(prompt):
+    """Call OpenAI API to get tailored resume"""
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are an expert resume writer and ATS optimization specialist."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=2000,
+            temperature=0.7
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"OpenAI API error: {e}")
+        return None
 
-    driver.quit()
+def create_docx_from_text(text, original_docx_path=None):
+    """Create a new .docx file from text, preserving basic formatting"""
+    try:
+        # Create a new document
+        doc = Document()
+        
+        # Add title styling
+        title_style = doc.styles['Heading 1']
+        
+        # Split text into sections and paragraphs
+        sections = text.split('\n\n')
+        
+        for section in sections:
+            if section.strip():
+                lines = section.split('\n')
+                for i, line in enumerate(lines):
+                    line = line.strip()
+                    if line:
+                        # Check if this looks like a section header
+                        if (line.isupper() or 
+                            any(header in line.upper() for header in ['EXPERIENCE', 'EDUCATION', 'SKILLS', 'SUMMARY', 'OBJECTIVE', 'CONTACT'])):
+                            # Add as heading
+                            doc.add_heading(line, level=1)
+                        else:
+                            # Add as regular paragraph
+                            paragraph = doc.add_paragraph(line)
+                            
+                            # Add bullet formatting if line starts with bullet-like characters
+                            if line.startswith('•') or line.startswith('-') or line.startswith('*'):
+                                paragraph.style = 'List Bullet'
+        
+        # Save to bytes
+        doc_bytes = io.BytesIO()
+        doc.save(doc_bytes)
+        doc_bytes.seek(0)
+        
+        return doc_bytes
+    except Exception as e:
+        print(f"Error creating docx: {e}")
+        return None
 
-
-# ─── ROUTES ────────────────────────────────────────────────────────────────
-@app.route("/", methods=["GET","POST"])
+@app.route('/')
 def index():
-    if request.method == "POST":
-        resume = request.files.get("resume")
-        jd_text = request.form.get("jd_text","" ).strip()
-        app_url = request.form.get("app_url","" ).strip()
+    return render_template('index.html')
 
-        if not (resume and allowed_file(resume.filename)):
-            flash("❌ Valid resume file required (.docx/.txt).")
-            return redirect(url_for("index"))
-        if not jd_text:
-            flash("❌ Job description text is required.")
-            return redirect(url_for("index"))
+@app.route('/upload', methods=['POST'])
+def upload_files():
+    if 'resume' not in request.files or 'job_description' not in request.files:
+        return jsonify({'error': 'Both resume and job description files are required'}), 400
+    
+    resume_file = request.files['resume']
+    job_file = request.files['job_description']
+    
+    if resume_file.filename == '' or job_file.filename == '':
+        return jsonify({'error': 'No files selected'}), 400
+    
+    if not (allowed_file(resume_file.filename) and allowed_file(job_file.filename)):
+        return jsonify({'error': 'Invalid file type. Please upload .docx for resume and .txt for job description'}), 400
+    
+    try:
+        # Generate unique session ID
+        session_id = str(uuid.uuid4())
+        
+        # Save uploaded files
+        resume_filename = secure_filename(f"{session_id}_resume.docx")
+        job_filename = secure_filename(f"{session_id}_job.txt")
+        
+        resume_path = os.path.join(app.config['UPLOAD_FOLDER'], resume_filename)
+        job_path = os.path.join(app.config['UPLOAD_FOLDER'], job_filename)
+        
+        resume_file.save(resume_path)
+        job_file.save(job_path)
+        
+        # Extract text from files
+        resume_text = extract_text_from_docx(resume_path)
+        job_text = extract_text_from_txt(job_path)
+        
+        if not resume_text or not job_text:
+            return jsonify({'error': 'Failed to extract text from uploaded files'}), 400
+        
+        # Create tailoring prompt
+        prompt = create_tailoring_prompt(resume_text, job_text)
+        
+        # Call OpenAI API
+        tailored_resume = call_openai_api(prompt)
+        
+        if not tailored_resume:
+            return jsonify({'error': 'Failed to generate tailored resume'}), 500
+        
+        # Create new .docx file
+        output_docx = create_docx_from_text(tailored_resume, resume_path)
+        
+        if not output_docx:
+            return jsonify({'error': 'Failed to create output document'}), 500
+        
+        # Save the output file
+        output_filename = f"{session_id}_tailored_resume.docx"
+        output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
+        
+        with open(output_path, 'wb') as f:
+            f.write(output_docx.getvalue())
+        
+        # Clean up input files
+        os.remove(resume_path)
+        os.remove(job_path)
+        
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'message': 'Resume tailored successfully!',
+            'download_url': f'/download/{session_id}'
+        })
+        
+    except Exception as e:
+        print(f"Error processing files: {e}")
+        return jsonify({'error': 'An error occurred while processing your files'}), 500
 
-        rfn = secure_filename(resume.filename)
-        rpath = os.path.join(app.config["UPLOAD_FOLDER"], rfn)
-        resume.save(rpath)
+@app.route('/download/<session_id>')
+def download_file(session_id):
+    try:
+        filename = f"{session_id}_tailored_resume.docx"
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        
+        if not os.path.exists(file_path):
+            return jsonify({'error': 'File not found'}), 404
+        
+        def remove_file_after_send(response):
+            try:
+                os.remove(file_path)
+            except Exception as e:
+                print(f"Error removing file: {e}")
+            return response
+        
+        return send_file(
+            file_path,
+            as_attachment=True,
+            download_name=f"tailored_resume_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx",
+            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        )
+        
+    except Exception as e:
+        print(f"Error downloading file: {e}")
+        return jsonify({'error': 'Error downloading file'}), 500
 
-        resume_text = extract_text(rpath)
-        tailored = tailor_resume(resume_text, jd_text)
+@app.route('/health')
+def health_check():
+    return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()})
 
-        tfname = "tailored_resume.docx"
-        tpath  = os.path.join(app.config["UPLOAD_FOLDER"], tfname)
-        # write .docx output using python-docx
-        from docx import Document as Doc
-        doc = Doc()
-        for line in tailored.split("\n"):
-            if line.startswith("- ") or line.startswith("• "):
-                doc.add_paragraph(line[2:], style="List Bullet")
-            else:
-                doc.add_paragraph(line)
-        doc.save(tpath)
-
-        return send_file(tpath, as_attachment=True, download_name=tfname)
-
-    return render_template("index.html")
-
-if __name__ == "__main__":
-    public_url = ngrok.connect(5000)
-    print(" * Public URL:", public_url)
-    app.run(port=5000)
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(debug=os.environ.get('DEBUG', 'False').lower() == 'true', 
+            host='0.0.0.0', 
+            port=port)
