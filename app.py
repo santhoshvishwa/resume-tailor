@@ -1,28 +1,97 @@
 import os
-from flask import Flask, request, render_template, send_file
+from flask import Flask, request, render_template, send_file, redirect, url_for, flash
 import openai
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
+from docx import Document
 from werkzeug.utils import secure_filename
 from pyngrok import ngrok
 
-# ─── CONFIG ─────────────────────────────────────────────────────────────
+# ─── CONFIG ───────────────────────────────────────────────────────────────
 openai.api_key = os.getenv("OPENAI_API_KEY")
-NGROK_TOKEN    = os.getenv("NGROK_AUTH_TOKEN", None)
-if NGROK_TOKEN:
-    ngrok.set_auth_token(NGROK_TOKEN)
+if token := os.getenv("NGROK_AUTH_TOKEN"):
+    ngrok.set_auth_token(token)
 
 UPLOAD_FOLDER = "uploads"
 ALLOWED_EXTS  = {"pdf", "docx", "txt"}
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 app = Flask(__name__)
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-me")
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
 def allowed_file(fname):
     return "." in fname and fname.rsplit(".",1)[1].lower() in ALLOWED_EXTS
 
+def extract_text(path):
+    ext = path.rsplit(".",1)[1].lower()
+    if ext == "docx":
+        doc = Document(path)
+        return "\n".join(p.text for p in doc.paragraphs)
+    with open(path, "r", errors="ignore") as f:
+        return f.read()
+
+# ─── STEP 1: LazyApply job search ───────────────────────────────────────────
+def lazyapply_search(email, password, keywords):
+    opts = Options()
+    opts.add_argument("--headless")
+    opts.add_argument("--no-sandbox")
+    driver = webdriver.Chrome(ChromeDriverManager().install(), options=opts)
+    driver.get("https://app.lazyapply.com/login")
+    # —— TODO: fill in your login & search logic —— #
+    # driver.find_element(...).send_keys(email)
+    # driver.find_element(...).send_keys(password)
+    # driver.find_element(...).click()
+    # driver.get(f"https://app.lazyapply.com/jobs?search={keywords}")
+    jobs = []
+    # for e in driver.find_elements("css selector", ".job-card"):
+    #     jobs.append({
+    #       "id": e.get_attribute("data-job-id"),
+    #       "title": e.find_element("css selector",".job-title").text,
+    #       "url":   e.find_element("css selector","a").get_attribute("href")
+    #     })
+    driver.quit()
+    return jobs
+
+def get_job_description(job_url):
+    opts = Options()
+    opts.add_argument("--headless")
+    opts.add_argument("--no-sandbox")
+    driver = webdriver.Chrome(ChromeDriverManager().install(), options=opts)
+    driver.get(job_url)
+    jd = driver.find_element("css selector","div.job-description").text
+    driver.quit()
+    return jd
+
+# ─── STEP 2: Jobalytics‐style analysis + bullet generation ────────────────
+def find_missing_keywords(resume_text, jd_text):
+    prompt = (
+        "You are an ATS optimization assistant.\n\n"
+        "Resume:\n" + resume_text + "\n\n"
+        "Job Description:\n" + jd_text + "\n\n"
+        "List, comma-separated, the keywords in the JD that are missing from the resume."
+    )
+    resp = openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role":"user","content":prompt}],
+        temperature=0.0,
+        max_tokens=200
+    )
+    return [k.strip() for k in resp.choices[0].message.content.split(",") if k.strip()]
+
+def generate_bullet(missing):
+    kws = ", ".join(missing)
+    prompt = f"Write one concise, impact-oriented resume bullet that uses these keywords: {kws}."
+    resp = openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role":"user","content":prompt}],
+        temperature=0.2,
+        max_tokens=60
+    )
+    return resp.choices[0].message.content.strip()
+
+# ─── STEP 3: Tailor & Submit ───────────────────────────────────────────────
 def tailor_resume(resume_text, jd_text):
     prompt = (
         "You are a resume optimization assistant.\n\n"
@@ -31,7 +100,7 @@ def tailor_resume(resume_text, jd_text):
         "Generate a concise, tailored resume highlighting only the skills, tools, "
         "and achievements most relevant to the JD."
     )
-    resp = openai.ChatCompletion.create(
+    resp = openai.chat.completions.create(
         model="gpt-4o",
         messages=[{"role":"user","content":prompt}],
         temperature=0.2,
@@ -43,64 +112,66 @@ def automate_submission(app_url, filepath):
     opts = Options()
     opts.add_argument("--headless")
     opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
     driver = webdriver.Chrome(ChromeDriverManager().install(), options=opts)
     driver.get(app_url)
     driver.find_element("css selector", "input[type='file']").send_keys(os.path.abspath(filepath))
     driver.find_element("css selector", "button[type='submit']").click()
     driver.quit()
 
+# ─── ROUTES ────────────────────────────────────────────────────────────────
+
 @app.route("/", methods=["GET","POST"])
-def home():
+def index():
     if request.method == "POST":
-        # handle resume upload
-        resume = request.files.get("resume")
-        jd_text = request.form.get("jd_text", "").strip()
-        app_url = request.form.get("app_url", "").strip()
-
+        # Step 1
+        email    = request.form["email"]
+        password = request.form["password"]
+        search   = request.form["search"]
+        resume   = request.files.get("resume")
         if not (resume and allowed_file(resume.filename)):
-            return "❌ Invalid resume file type", 400
-        if not jd_text:
-            return "❌ Job description is required", 400
+            flash("❌ Valid resume file required (.docx/.txt).")
+            return redirect(url_for("index"))
+        fn   = secure_filename(resume.filename)
+        path = os.path.join(UPLOAD_FOLDER, fn)
+        resume.save(path)
 
-        # save resume
-        rfn   = secure_filename(resume.filename)
-        rpath = os.path.join(app.config["UPLOAD_FOLDER"], rfn)
-        resume.save(rpath)
-
-        # read resume text
-        with open(rpath, "r", errors="ignore") as f:
-            resume_text = f.read()
-
-        # tailor
-        tailored = tailor_resume(resume_text, jd_text)
-
-        # write out tailored version
-        tfname = "tailored_resume.txt"
-        tpath  = os.path.join(app.config["UPLOAD_FOLDER"], tfname)
-        with open(tpath, "w", encoding="utf-8") as f:
-            f.write(tailored)
-
-        return render_template("result.html",
-                               tailored_file=tfname,
-                               app_url=app_url)
-
+        jobs = lazyapply_search(email, password, search)
+        return render_template("results.html", jobs=jobs, resume_fn=fn)
     return render_template("index.html")
 
-@app.route("/download/<filename>")
-def download(filename):
-    return send_file(os.path.join(app.config["UPLOAD_FOLDER"], filename),
-                     as_attachment=True)
+@app.route("/analyze", methods=["POST"])
+def analyze():
+    # Step 2
+    job_url    = request.form["job_url"]
+    resume_fn  = request.form["resume_fn"]
+    rpath      = os.path.join(UPLOAD_FOLDER, resume_fn)
+    resume_txt = extract_text(rpath)
+    jd_txt     = get_job_description(job_url)
+    missing    = find_missing_keywords(resume_txt, jd_txt)
+    bullet     = generate_bullet(missing)
 
-@app.route("/submit", methods=["POST"])
-def submit():
-    tf      = request.form["tailored_file"]
-    app_url = request.form["app_url"]
-    filepath= os.path.join(app.config["UPLOAD_FOLDER"], tf)
-    automate_submission(app_url, filepath)
-    return "✅ Resume submitted successfully!"
+    # write out tailored + bullet
+    tailored = tailor_resume(resume_txt, jd_txt) + "\n\n• " + bullet
+    out_fn    = "tailored_" + resume_fn
+    out_path  = os.path.join(UPLOAD_FOLDER, out_fn)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(tailored)
 
-if __name__ == "__main__":
+    return render_template("analyzed.html",
+                           new_resume=out_fn,
+                           job_url=job_url,
+                           missing=missing,
+                           bullet=bullet)
+
+@app.route("/apply", methods=["POST"])
+def apply():
+    # Step 3
+    new_fn  = request.form["new_resume"]
+    job_url = request.form["job_url"]
+    automate_submission(job_url, os.path.join(UPLOAD_FOLDER, new_fn))
+    return render_template("done.html")
+
+if __name__=="__main__":
     public_url = ngrok.connect(5000)
-    print(f" * Public URL: {public_url}")
+    print(" * Public URL:", public_url)
     app.run(port=5000)
