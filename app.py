@@ -1,7 +1,7 @@
 import os
 from flask import Flask, request, render_template, send_file, redirect, url_for, flash
 import openai
-from openai.error import RateLimitError
+from openai import RateLimitError
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
@@ -39,7 +39,13 @@ def extract_text(path):
         return f.read()
 
 
-# ─── STEP 1: LazyApply job search ───────────────────────────────────────────
+# Error handler for OpenAI rate limits
+@app.errorhandler(RateLimitError)
+def handle_rate_limit(e):
+    flash('❌ OpenAI API quota exceeded. Please check your billing or use another API key.')
+    return redirect(url_for('index'))
+
+# ─── STEP 1: LazyApply job search ─────────────────────────────────────────
 def lazyapply_search(email, password, keywords):
     opts = Options()
     opts.add_argument("--headless")
@@ -48,13 +54,7 @@ def lazyapply_search(email, password, keywords):
     driver = webdriver.Chrome(service=service, options=opts)
     driver.get("https://app.lazyapply.com/login")
     # —— TODO: fill in your login & search logic —— #
-    # driver.find_element(...).send_keys(email)
-    # driver.find_element(...).send_keys(password)
-    # driver.find_element(...).click()
-    # driver.get(f"https://app.lazyapply.com/jobs?search={keywords}")
     jobs = []
-    # for e in driver.find_elements(...):
-    #     jobs.append({ ... })
     driver.quit()
     return jobs
 
@@ -66,12 +66,12 @@ def get_job_description(job_url):
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=opts)
     driver.get(job_url)
-    jd = driver.find_element("css selector","div.job-description").text
+    jd = driver.find_element(By.CSS_SELECTOR, "div.job-description").text
     driver.quit()
     return jd
 
 
-# ─── STEP 2: Jobalytics‐style analysis + bullet generation ────────────────
+# ─── STEP 2: Jobalytics-style analysis + bullet generation ────────────────
 def find_missing_keywords(resume_text, jd_text):
     prompt = (
         "You are an ATS optimization assistant.\n\n"
@@ -158,56 +158,41 @@ def automate_submission(app_url, filepath):
 
 # ─── ROUTES ────────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET","POST"])
-
-@app.errorhandler(RateLimitError)
-def handle_rate_limit(e):
-    # Handle OpenAI rate limit / quota errors gracefully
-    flash('❌ OpenAI API quota exceeded. Please check your billing or use another API key.')
-    return redirect(url_for('index'))
-
-@app.route("/", methods=["GET","POST"])
 def index():
     if request.method == "POST":
-        email    = request.form["email"]
-        password = request.form["password"]
-        search   = request.form["search"]
-        resume   = request.files.get("resume")
+        resume = request.files.get("resume")
+        jd_text = request.form.get("jd_text","" ).strip()
+        app_url = request.form.get("app_url","" ).strip()
+
         if not (resume and allowed_file(resume.filename)):
             flash("❌ Valid resume file required (.docx/.txt).")
             return redirect(url_for("index"))
-        fn   = secure_filename(resume.filename)
-        path = os.path.join(UPLOAD_FOLDER, fn)
-        resume.save(path)
-        jobs = lazyapply_search(email, password, search)
-        return render_template("results.html", jobs=jobs, resume_fn=fn)
+        if not jd_text:
+            flash("❌ Job description text is required.")
+            return redirect(url_for("index"))
+
+        rfn = secure_filename(resume.filename)
+        rpath = os.path.join(app.config["UPLOAD_FOLDER"], rfn)
+        resume.save(rpath)
+
+        resume_text = extract_text(rpath)
+        tailored = tailor_resume(resume_text, jd_text)
+
+        tfname = "tailored_resume.docx"
+        tpath  = os.path.join(app.config["UPLOAD_FOLDER"], tfname)
+        # write .docx output using python-docx
+        from docx import Document as Doc
+        doc = Doc()
+        for line in tailored.split("\n"):
+            if line.startswith("- ") or line.startswith("• "):
+                doc.add_paragraph(line[2:], style="List Bullet")
+            else:
+                doc.add_paragraph(line)
+        doc.save(tpath)
+
+        return send_file(tpath, as_attachment=True, download_name=tfname)
+
     return render_template("index.html")
-
-@app.route("/analyze", methods=["POST"])
-def analyze():
-    job_url   = request.form["job_url"]
-    resume_fn = request.form["resume_fn"]
-    rpath     = os.path.join(UPLOAD_FOLDER, resume_fn)
-    resume_txt = extract_text(rpath)
-    jd_txt     = get_job_description(job_url)
-    missing    = find_missing_keywords(resume_txt, jd_txt)
-    bullet     = generate_bullet(missing)
-    tailored   = tailor_resume(resume_txt, jd_txt) + "\n\n• " + bullet
-    out_fn     = "tailored_" + resume_fn
-    out_path   = os.path.join(UPLOAD_FOLDER, out_fn)
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(tailored)
-    return render_template("analyzed.html",
-                           new_resume=out_fn,
-                           job_url=job_url,
-                           missing=missing,
-                           bullet=bullet)
-
-@app.route("/apply", methods=["POST"])
-def apply():
-    new_fn  = request.form["new_resume"]
-    job_url = request.form["job_url"]
-    automate_submission(job_url, os.path.join(UPLOAD_FOLDER, new_fn))
-    return render_template("done.html")
 
 if __name__ == "__main__":
     public_url = ngrok.connect(5000)
