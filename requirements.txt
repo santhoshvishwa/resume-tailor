@@ -1,6 +1,7 @@
 flask
 openai
 selenium
-pyngrok
 webdriver-manager
+python-docx
+pyngrok
 gunicorn
