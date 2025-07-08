@@ -1,22 +1,15 @@
 <!doctype html>
-<html>
-  <head><title>Tailor & Submit</title></head>
-  <body>
-    <h2>Step 1: Upload Resume & Paste JD</h2>
-    <form method="post" enctype="multipart/form-data">
-      <p>
-        <label>Resume file: <input type="file" name="resume" required></label><br><br>
-
-        <label>Job Description:</label><br>
-        <textarea name="jd_text" rows="8" cols="60"
-                  placeholder="Paste the job description here…" required></textarea><br><br>
-
-        <label>Application URL: 
-          <input type="url" name="app_url"
-                 placeholder="https://apply.here" required>
-        </label>
-      </p>
-      <button type="submit">Tailor Resume →</button>
-    </form>
-  </body>
+<html><head><title>1) Find Jobs</title></head>
+<body>
+  <h2>Step 1: Sign in & Search Jobs</h2>
+  <form method="post" enctype="multipart/form-data">
+    <label>Email:    <input type="email"   name="email"    required></label><br><br>
+    <label>Password: <input type="password" name="password" required></label><br><br>
+    <label>Keywords: <input type="text"    name="search"
+                          placeholder="e.g. Data Analyst remote" required></label><br><br>
+    <label>Resume:   <input type="file"    name="resume"
+                          accept=".docx,.txt" required></label><br><br>
+    <button type="submit">Find Jobs →</button>
+  </form>
+</body>
 </html>
