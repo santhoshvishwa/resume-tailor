@@ -7,6 +7,10 @@ from webdriver_manager.chrome import ChromeDriverManager
 from docx import Document
 from werkzeug.utils import secure_filename
 from pyngrok import ngrok
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -109,14 +113,75 @@ def tailor_resume(resume_text, jd_text):
     return resp.choices[0].message.content
 
 def automate_submission(app_url, filepath):
+    # 1) Chrome setup
     opts = Options()
     opts.add_argument("--headless")
     opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
     driver = webdriver.Chrome(ChromeDriverManager().install(), options=opts)
+
+    # 2) Create a 15-second waiter for elements
+    wait = WebDriverWait(driver, 15)
+
+    # 3) Load the target page
     driver.get(app_url)
-    driver.find_element("css selector", "input[type='file']").send_keys(os.path.abspath(filepath))
-    driver.find_element("css selector", "button[type='submit']").click()
+
+    # 4) If it’s a LinkedIn jobs URL, do Easy Apply
+    if "linkedin.com/jobs" in app_url:
+        # 4a) Click the “Easy Apply” button in the job header
+        ea = wait.until(EC.element_to_be_clickable((
+            By.CSS_SELECTOR,
+            "button[data-control-name*='easy_apply']"
+        )))
+        ea.click()
+
+        # 4b) Wait for the file-upload input to appear in the modal
+        up = wait.until(EC.presence_of_element_located((
+            By.CSS_SELECTOR,
+            "input[type='file']"
+        )))
+        # Upload your resume
+        up.send_keys(os.path.abspath(filepath))
+
+        # 4c) Some Easy Apply flows have multiple “Next” steps before the final “Submit”:
+        while True:
+            try:
+                # Try to click the final “Submit application” button
+                submit_btn = wait.until(EC.element_to_be_clickable((
+                    By.CSS_SELECTOR,
+                    "button[aria-label='Submit application'],"
+                    "button[data-control-name='submit_unify']"
+                )))
+                submit_btn.click()
+                break
+            except:
+                # If that didn’t exist yet, click the “Continue” or “Next” button
+                nxt = wait.until(EC.element_to_be_clickable((
+                    By.CSS_SELECTOR,
+                    "button[aria-label='Continue to next step'],"
+                    "button[aria-label='Next']"
+                )))
+                nxt.click()
+
+    # 5) Otherwise use your generic “upload + submit” flow
+    else:
+        # 5a) Wait for the file input on the page
+        fld = wait.until(EC.presence_of_element_located((
+            By.CSS_SELECTOR,
+            "input[type='file']"
+        )))
+        fld.send_keys(os.path.abspath(filepath))
+
+        # 5b) Wait for and click whichever submit button is present
+        btn = wait.until(EC.element_to_be_clickable((
+            By.CSS_SELECTOR,
+            "button[type='submit']"
+        )))
+        btn.click()
+
+    # 6) Close the browser when done
     driver.quit()
+
 
 # ─── ROUTES ────────────────────────────────────────────────────────────────
 
