@@ -1,13 +1,22 @@
 <!doctype html>
-<html>
-  <head><title>Tailored Resume Ready</title></head>
-  <body>
-    <h2>Your tailored resume is ready:</h2>
-    <a href="{{ url_for('download', filename=tailored_file) }}">Download tailored resume</a>
-    <form method="post" action="{{ url_for('submit') }}">
-      <input type="hidden" name="tailored_file" value="{{ tailored_file }}">
-      <input type="hidden" name="app_url" value="{{ app_url }}">
-      <button type="submit">Submit to {{ app_url }} →</button>
-    </form>
-  </body>
+<html><head><title>2) Select a Job</title></head>
+<body>
+  <h2>Step 1 Results: Pick a Job to Analyze</h2>
+  {% if jobs %}
+    <ul>
+    {% for j in jobs %}
+      <li>
+        <strong>{{ j.title }}</strong><br>
+        <form method="post" action="{{ url_for('analyze') }}">
+          <input type="hidden" name="job_url"   value="{{ j.url }}">
+          <input type="hidden" name="resume_fn" value="{{ resume_fn }}">
+          <button type="submit">Analyze & Tailor →</button>
+        </form>
+      </li>
+    {% endfor %}
+    </ul>
+  {% else %}
+    <p>No jobs found. Try different keywords.</p>
+  {% endif %}
+</body>
 </html>
