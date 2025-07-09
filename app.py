@@ -1,266 +1,370 @@
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, request, jsonify, render_template_string
 import os
-import openai
-from docx import Document
-import tempfile
-import io
-from datetime import datetime
-import re
+import requests
 import json
-import uuid
-from werkzeug.utils import secure_filename
+from docx import Document
+import re
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key-change-this')
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
-# Configure OpenAI
-openai.api_key = os.environ.get('OPENAI_API_KEY')
+@app.route('/')
+def index():
+    return render_template_string('''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Resume Tailor</title>
+        <style>
+            body { 
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+                max-width: 900px; 
+                margin: 0 auto; 
+                padding: 20px; 
+                background: #f8f9fa;
+            }
+            .container {
+                background: white;
+                border-radius: 8px;
+                padding: 30px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            }
+            h1 {
+                color: #2c3e50;
+                text-align: center;
+                margin-bottom: 30px;
+            }
+            .upload-area { 
+                border: 2px dashed #3498db; 
+                padding: 30px; 
+                text-align: center; 
+                margin: 20px 0; 
+                border-radius: 8px;
+                background: #f8f9ff;
+            }
+            .form-group {
+                margin: 20px 0;
+            }
+            label {
+                display: block;
+                margin-bottom: 8px;
+                font-weight: 500;
+                color: #2c3e50;
+            }
+            input[type="file"] {
+                width: 100%;
+                padding: 10px;
+                border: 2px solid #ddd;
+                border-radius: 4px;
+                background: white;
+            }
+            textarea {
+                width: 100%;
+                padding: 12px;
+                border: 2px solid #ddd;
+                border-radius: 4px;
+                font-family: inherit;
+                resize: vertical;
+                background: white;
+            }
+            .error { 
+                color: #e74c3c; 
+                background: #ffebee; 
+                padding: 15px; 
+                border-radius: 4px; 
+                margin: 10px 0; 
+                border-left: 4px solid #e74c3c;
+            }
+            .success { 
+                color: #27ae60; 
+                background: #e8f5e9; 
+                padding: 15px; 
+                border-radius: 4px; 
+                margin: 10px 0; 
+                border-left: 4px solid #27ae60;
+            }
+            .loading { 
+                display: none; 
+                text-align: center;
+                padding: 20px;
+                color: #3498db;
+            }
+            .spinner {
+                border: 4px solid #f3f3f3;
+                border-top: 4px solid #3498db;
+                border-radius: 50%;
+                width: 30px;
+                height: 30px;
+                animation: spin 1s linear infinite;
+                margin: 0 auto 10px;
+            }
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+            button { 
+                background: linear-gradient(135deg, #3498db, #2980b9);
+                color: white; 
+                border: none; 
+                padding: 12px 30px; 
+                border-radius: 6px; 
+                cursor: pointer; 
+                font-size: 16px;
+                width: 100%;
+                transition: all 0.3s ease;
+            }
+            button:hover {
+                background: linear-gradient(135deg, #2980b9, #3498db);
+                transform: translateY(-2px);
+            }
+            button:disabled { 
+                background: #bdc3c7; 
+                cursor: not-allowed; 
+                transform: none;
+            }
+            .result-container {
+                margin-top: 20px;
+                padding: 20px;
+                background: #f8f9fa;
+                border-radius: 8px;
+                border: 1px solid #dee2e6;
+            }
+            .suggestion-item {
+                background: white;
+                margin: 10px 0;
+                padding: 15px;
+                border-radius: 6px;
+                border-left: 4px solid #3498db;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🎯 Resume Tailor</h1>
+            <p style="text-align: center; color: #7f8c8d; margin-bottom: 30px;">
+                Optimize your resume to match job requirements perfectly
+            </p>
+            
+            <div class="upload-area">
+                <div class="form-group">
+                    <label for="resume">📄 Upload Your Resume</label>
+                    <input type="file" id="resume" accept=".docx,.txt" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="jobDescription">📋 Job Description</label>
+                    <textarea id="jobDescription" placeholder="Paste the job description here..." rows="6" required></textarea>
+                </div>
+                
+                <button onclick="uploadFiles()">✨ Tailor My Resume</button>
+            </div>
+            
+            <div id="loading" class="loading">
+                <div class="spinner"></div>
+                <p>Analyzing your resume and job description...</p>
+            </div>
+            
+            <div id="result"></div>
+        </div>
 
-# File upload configuration
-UPLOAD_FOLDER = 'uploads'
-ALLOWED_EXTENSIONS = {'docx', 'txt'}
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+        <script>
+            async function uploadFiles() {
+                const fileInput = document.getElementById('resume');
+                const jobDescription = document.getElementById('jobDescription').value;
+                const loading = document.getElementById('loading');
+                const result = document.getElementById('result');
+                const button = document.querySelector('button');
+                
+                if (!fileInput.files[0] || !jobDescription.trim()) {
+                    result.innerHTML = '<div class="error">❌ Please select a resume file and enter a job description.</div>';
+                    return;
+                }
+                
+                const formData = new FormData();
+                formData.append('resume', fileInput.files[0]);
+                formData.append('job_description', jobDescription);
+                
+                loading.style.display = 'block';
+                button.disabled = true;
+                result.innerHTML = '';
+                
+                try {
+                    const response = await fetch('/upload', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (response.ok) {
+                        result.innerHTML = `
+                            <div class="success">✅ Resume analysis completed!</div>
+                            <div class="result-container">
+                                <h3>📊 Tailoring Suggestions:</h3>
+                                <div style="white-space: pre-wrap; line-height: 1.6;">${data.suggestions}</div>
+                            </div>
+                        `;
+                    } else {
+                        result.innerHTML = `<div class="error">❌ Error: ${data.error}</div>`;
+                    }
+                } catch (error) {
+                    result.innerHTML = `<div class="error">❌ Network error: ${error.message}</div>`;
+                } finally {
+                    loading.style.display = 'none';
+                    button.disabled = false;
+                }
+            }
+        </script>
+    </body>
+    </html>
+    ''')
 
-# Create upload directory if it doesn't exist
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-def extract_text_from_docx(file_path):
-    """Extract text content from a .docx file"""
+def extract_text_from_docx(file_stream):
+    """Extract text from DOCX file"""
     try:
-        doc = Document(file_path)
+        doc = Document(file_stream)
         text = []
         for paragraph in doc.paragraphs:
             text.append(paragraph.text)
         return '\n'.join(text)
     except Exception as e:
-        print(f"Error reading docx file: {e}")
-        return None
+        raise Exception(f"Error reading DOCX file: {str(e)}")
 
-def extract_text_from_txt(file_path):
-    """Extract text content from a .txt file"""
-    try:
-        with open(file_path, 'r', encoding='utf-8') as file:
-            return file.read()
-    except Exception as e:
-        print(f"Error reading txt file: {e}")
-        return None
+def extract_keywords(text):
+    """Extract key skills and keywords from text"""
+    # Common skill patterns
+    skills_patterns = [
+        r'\b(?:Python|Java|JavaScript|React|Angular|Vue|Node\.js|Django|Flask|Spring|SQL|MongoDB|PostgreSQL|MySQL|AWS|Azure|GCP|Docker|Kubernetes|Git|CI/CD|REST|API|HTML|CSS|TypeScript|C\+\+|C#|Ruby|PHP|Go|Rust|Scala|Machine Learning|AI|Data Science|Analytics|Tableau|Power BI|Excel|Leadership|Management|Communication|Problem Solving|Agile|Scrum|DevOps|Testing|QA|UX|UI|Product Management|Project Management|Marketing|Sales|Customer Service|Finance|Accounting|HR|Operations|Strategy|Business Analysis|Data Analysis|Research|Writing|Design|Creative|Photoshop|Illustrator|Figma|Sketch)\b',
+        r'\b\w+(?:\s+\w+)*(?:\s+(?:experience|skills?|knowledge|expertise|proficiency|certification|certified|degree|bachelor|master|phd|years?|months?))\b',
+        r'\b(?:experience|skilled?|proficient|expert|knowledge|familiar|understanding|background|expertise)\s+(?:in|with|of)\s+\w+(?:\s+\w+)*\b'
+    ]
+    
+    keywords = set()
+    for pattern in skills_patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        keywords.update(matches)
+    
+    return list(keywords)
 
-def create_tailoring_prompt(resume_text, job_description):
-    """Create a comprehensive prompt for resume tailoring"""
-    prompt = f"""
-You are an expert resume writer and ATS optimization specialist. Please rewrite the following resume to be perfectly tailored for the job description provided. Follow these guidelines:
+def analyze_resume_match(resume_text, job_description):
+    """Analyze how well the resume matches the job description"""
+    resume_keywords = set(extract_keywords(resume_text.lower()))
+    job_keywords = set(extract_keywords(job_description.lower()))
+    
+    # Find matching and missing keywords
+    matching_keywords = resume_keywords.intersection(job_keywords)
+    missing_keywords = job_keywords - resume_keywords
+    
+    # Calculate match score
+    if len(job_keywords) > 0:
+        match_score = len(matching_keywords) / len(job_keywords) * 100
+    else:
+        match_score = 0
+    
+    return {
+        'match_score': match_score,
+        'matching_keywords': list(matching_keywords),
+        'missing_keywords': list(missing_keywords),
+        'job_keywords': list(job_keywords)
+    }
 
-1. KEYWORD OPTIMIZATION:
-   - Identify key skills, technologies, and requirements from the job description
-   - Naturally incorporate these keywords throughout the resume
-   - Ensure keyword density is appropriate for ATS systems
-
-2. SUMMARY/OBJECTIVE REWRITE:
-   - Rewrite the professional summary to directly address the job requirements
-   - Highlight the most relevant experience and skills
-   - Use compelling language that matches the job posting tone
-
-3. EXPERIENCE ENHANCEMENT:
-   - Reorder and rewrite bullet points to emphasize relevant experience
-   - Use strong action verbs and quantify achievements where possible
-   - Focus on accomplishments that align with job requirements
-
-4. SKILLS OPTIMIZATION:
-   - Prioritize technical and soft skills mentioned in the job description
-   - Remove irrelevant skills that don't match the position
-   - Add any missing relevant skills the candidate likely has
-
-5. ATS FORMATTING:
-   - Use standard section headers (Experience, Education, Skills, etc.)
-   - Avoid complex formatting, tables, or graphics
-   - Use consistent bullet points and formatting
-
-6. MAINTAIN AUTHENTICITY:
-   - Keep all information truthful and accurate
-   - Don't add experience or skills the candidate doesn't have
-   - Preserve the candidate's voice and career progression
-
-JOB DESCRIPTION:
-{job_description}
-
-ORIGINAL RESUME:
-{resume_text}
-
-Please provide the tailored resume in a clean, professional format that will perform well in ATS systems. Return only the optimized resume content without any additional commentary.
-"""
-    return prompt
-
-def call_openai_api(prompt):
-    """Call OpenAI API to get tailored resume"""
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are an expert resume writer and ATS optimization specialist."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=2000,
-            temperature=0.7
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        print(f"OpenAI API error: {e}")
-        return None
-
-def create_docx_from_text(text, original_docx_path=None):
-    """Create a new .docx file from text, preserving basic formatting"""
-    try:
-        # Create a new document
-        doc = Document()
-        
-        # Add title styling
-        title_style = doc.styles['Heading 1']
-        
-        # Split text into sections and paragraphs
-        sections = text.split('\n\n')
-        
-        for section in sections:
-            if section.strip():
-                lines = section.split('\n')
-                for i, line in enumerate(lines):
-                    line = line.strip()
-                    if line:
-                        # Check if this looks like a section header
-                        if (line.isupper() or 
-                            any(header in line.upper() for header in ['EXPERIENCE', 'EDUCATION', 'SKILLS', 'SUMMARY', 'OBJECTIVE', 'CONTACT'])):
-                            # Add as heading
-                            doc.add_heading(line, level=1)
-                        else:
-                            # Add as regular paragraph
-                            paragraph = doc.add_paragraph(line)
-                            
-                            # Add bullet formatting if line starts with bullet-like characters
-                            if line.startswith('•') or line.startswith('-') or line.startswith('*'):
-                                paragraph.style = 'List Bullet'
-        
-        # Save to bytes
-        doc_bytes = io.BytesIO()
-        doc.save(doc_bytes)
-        doc_bytes.seek(0)
-        
-        return doc_bytes
-    except Exception as e:
-        print(f"Error creating docx: {e}")
-        return None
-
-@app.route('/')
-def index():
-    return render_template('index.html')
+def generate_suggestions(resume_text, job_description, analysis):
+    """Generate tailoring suggestions based on analysis"""
+    suggestions = []
+    
+    # Header suggestion
+    suggestions.append("📊 MATCH ANALYSIS")
+    suggestions.append(f"Current match score: {analysis['match_score']:.1f}%")
+    suggestions.append("")
+    
+    # Missing keywords section
+    if analysis['missing_keywords']:
+        suggestions.append("🔍 MISSING KEYWORDS TO ADD:")
+        for keyword in analysis['missing_keywords'][:10]:  # Top 10 missing keywords
+            suggestions.append(f"• {keyword}")
+        suggestions.append("")
+    
+    # Matching keywords section
+    if analysis['matching_keywords']:
+        suggestions.append("✅ KEYWORDS YOU'RE ALREADY USING:")
+        for keyword in analysis['matching_keywords'][:8]:  # Top 8 matching keywords
+            suggestions.append(f"• {keyword}")
+        suggestions.append("")
+    
+    # Section-specific suggestions
+    suggestions.append("📝 SECTION-SPECIFIC IMPROVEMENTS:")
+    
+    # Skills section
+    suggestions.append("• SKILLS SECTION:")
+    suggestions.append("  - Add technical skills mentioned in job description")
+    suggestions.append("  - Group skills by category (Technical, Soft Skills, Tools)")
+    suggestions.append("  - Prioritize skills mentioned in job requirements")
+    suggestions.append("")
+    
+    # Experience section
+    suggestions.append("• EXPERIENCE SECTION:")
+    suggestions.append("  - Use action verbs (Developed, Implemented, Managed, Led)")
+    suggestions.append("  - Quantify achievements with numbers and percentages")
+    suggestions.append("  - Match your experience descriptions to job requirements")
+    suggestions.append("  - Highlight relevant projects and accomplishments")
+    suggestions.append("")
+    
+    # General improvements
+    suggestions.append("🎯 GENERAL IMPROVEMENTS:")
+    suggestions.append("• Customize your professional summary to match the role")
+    suggestions.append("• Use industry-specific terminology from the job posting")
+    suggestions.append("• Ensure your resume passes ATS (Applicant Tracking System)")
+    suggestions.append("• Keep formatting clean and professional")
+    suggestions.append("• Use consistent verb tenses")
+    suggestions.append("")
+    
+    # Action items
+    suggestions.append("📋 ACTION ITEMS:")
+    suggestions.append("1. Add missing keywords naturally throughout your resume")
+    suggestions.append("2. Reorder sections to highlight most relevant experience first")
+    suggestions.append("3. Quantify achievements with specific numbers/percentages")
+    suggestions.append("4. Tailor your professional summary to this specific role")
+    suggestions.append("5. Review and update your skills section")
+    
+    return "\n".join(suggestions)
 
 @app.route('/upload', methods=['POST'])
-def upload_files():
-    if 'resume' not in request.files or 'job_description' not in request.files:
-        return jsonify({'error': 'Both resume and job description files are required'}), 400
-    
-    resume_file = request.files['resume']
-    job_file = request.files['job_description']
-    
-    if resume_file.filename == '' or job_file.filename == '':
-        return jsonify({'error': 'No files selected'}), 400
-    
-    if not (allowed_file(resume_file.filename) and allowed_file(job_file.filename)):
-        return jsonify({'error': 'Invalid file type. Please upload .docx for resume and .txt for job description'}), 400
-    
+def upload_file():
     try:
-        # Generate unique session ID
-        session_id = str(uuid.uuid4())
+        # Check if files are present
+        if 'resume' not in request.files:
+            return jsonify({'error': 'No resume file provided'}), 400
         
-        # Save uploaded files
-        resume_filename = secure_filename(f"{session_id}_resume.docx")
-        job_filename = secure_filename(f"{session_id}_job.txt")
+        if 'job_description' not in request.form:
+            return jsonify({'error': 'No job description provided'}), 400
         
-        resume_path = os.path.join(app.config['UPLOAD_FOLDER'], resume_filename)
-        job_path = os.path.join(app.config['UPLOAD_FOLDER'], job_filename)
+        resume_file = request.files['resume']
+        job_description = request.form['job_description']
         
-        resume_file.save(resume_path)
-        job_file.save(job_path)
+        if resume_file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
         
-        # Extract text from files
-        resume_text = extract_text_from_docx(resume_path)
-        job_text = extract_text_from_txt(job_path)
+        if not job_description.strip():
+            return jsonify({'error': 'Job description cannot be empty'}), 400
         
-        if not resume_text or not job_text:
-            return jsonify({'error': 'Failed to extract text from uploaded files'}), 400
+        # Extract text from resume
+        if resume_file.filename.endswith('.docx'):
+            resume_text = extract_text_from_docx(resume_file)
+        elif resume_file.filename.endswith('.txt'):
+            resume_text = resume_file.read().decode('utf-8')
+        else:
+            return jsonify({'error': 'Unsupported file format. Please use .docx or .txt files.'}), 400
         
-        # Create tailoring prompt
-        prompt = create_tailoring_prompt(resume_text, job_text)
+        # Analyze resume against job description
+        analysis = analyze_resume_match(resume_text, job_description)
         
-        # Call OpenAI API
-        tailored_resume = call_openai_api(prompt)
+        # Generate suggestions
+        suggestions = generate_suggestions(resume_text, job_description, analysis)
         
-        if not tailored_resume:
-            return jsonify({'error': 'Failed to generate tailored resume'}), 500
-        
-        # Create new .docx file
-        output_docx = create_docx_from_text(tailored_resume, resume_path)
-        
-        if not output_docx:
-            return jsonify({'error': 'Failed to create output document'}), 500
-        
-        # Save the output file
-        output_filename = f"{session_id}_tailored_resume.docx"
-        output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
-        
-        with open(output_path, 'wb') as f:
-            f.write(output_docx.getvalue())
-        
-        # Clean up input files
-        os.remove(resume_path)
-        os.remove(job_path)
-        
-        return jsonify({
-            'success': True,
-            'session_id': session_id,
-            'message': 'Resume tailored successfully!',
-            'download_url': f'/download/{session_id}'
-        })
+        return jsonify({'suggestions': suggestions})
         
     except Exception as e:
-        print(f"Error processing files: {e}")
-        return jsonify({'error': 'An error occurred while processing your files'}), 500
-
-@app.route('/download/<session_id>')
-def download_file(session_id):
-    try:
-        filename = f"{session_id}_tailored_resume.docx"
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        
-        if not os.path.exists(file_path):
-            return jsonify({'error': 'File not found'}), 404
-        
-        def remove_file_after_send(response):
-            try:
-                os.remove(file_path)
-            except Exception as e:
-                print(f"Error removing file: {e}")
-            return response
-        
-        return send_file(
-            file_path,
-            as_attachment=True,
-            download_name=f"tailored_resume_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx",
-            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-        )
-        
-    except Exception as e:
-        print(f"Error downloading file: {e}")
-        return jsonify({'error': 'Error downloading file'}), 500
-
-@app.route('/health')
-def health_check():
-    return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()})
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(debug=os.environ.get('DEBUG', 'False').lower() == 'true', 
-            host='0.0.0.0', 
-            port=port)
+    app.run(host='0.0.0.0', port=port, debug=False)
