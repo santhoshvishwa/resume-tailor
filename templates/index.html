@@ -1,34 +1,603 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>Resume Tailor</title>
-  <style>
-    body { font-family: sans-serif; max-width: 600px; margin: 2rem auto; }
-    textarea { width: 100%; height: 200px; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resume Tailor - AI-Powered Resume Optimization</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            max-width: 600px;
+            width: 100%;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .container::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            color: #333;
+            font-size: 2.5em;
+            font-weight: 700;
+            margin-bottom: 10px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 1.1em;
+            line-height: 1.6;
+        }
+
+        .upload-section {
+            margin-bottom: 30px;
+        }
+
+        .upload-section h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+            font-weight: 600;
+        }
+
+        .file-upload {
+            border: 2px dashed #ddd;
+            border-radius: 12px;
+            padding: 30px;
+            text-align: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            background: #fafafa;
+        }
+
+        .file-upload:hover {
+            border-color: #667eea;
+            background: #f0f4ff;
+        }
+
+        .file-upload.dragover {
+            border-color: #667eea;
+            background: #f0f4ff;
+            transform: scale(1.02);
+        }
+
+        .file-upload input[type="file"] {
+            display: none;
+        }
+
+        .upload-icon {
+            font-size: 3em;
+            color: #667eea;
+            margin-bottom: 15px;
+        }
+
+        .upload-text {
+            color: #666;
+            font-size: 1.1em;
+            margin-bottom: 10px;
+        }
+
+        .upload-hint {
+            color: #999;
+            font-size: 0.9em;
+        }
+
+        .file-info {
+            display: none;
+            background: #e8f5e8;
+            border: 1px solid #4caf50;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+        }
+
+        .file-info.show {
+            display: block;
+        }
+
+        .file-name {
+            color: #2e7d32;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .file-size {
+            color: #4caf50;
+            font-size: 0.9em;
+        }
+
+        .process-btn {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 18px 40px;
+            border-radius: 50px;
+            font-size: 1.1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            width: 100%;
+            margin-top: 30px;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .process-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .process-btn:disabled {
+            background: #ddd;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .progress-section {
+            display: none;
+            text-align: center;
+            margin-top: 30px;
+        }
+
+        .progress-section.show {
+            display: block;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .status-message {
+            color: #666;
+            font-size: 1.1em;
+            margin-top: 15px;
+        }
+
+        .result-section {
+            display: none;
+            background: #e8f5e8;
+            border-radius: 12px;
+            padding: 25px;
+            margin-top: 30px;
+            text-align: center;
+        }
+
+        .result-section.show {
+            display: block;
+        }
+
+        .success-icon {
+            font-size: 3em;
+            color: #4caf50;
+            margin-bottom: 15px;
+        }
+
+        .download-btn {
+            background: #4caf50;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 50px;
+            font-size: 1.1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+            margin-top: 15px;
+        }
+
+        .download-btn:hover {
+            background: #45a049;
+            transform: translateY(-2px);
+        }
+
+        .error-section {
+            display: none;
+            background: #ffebee;
+            border: 1px solid #f44336;
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+
+        .error-section.show {
+            display: block;
+        }
+
+        .error-message {
+            color: #c62828;
+            font-weight: 600;
+        }
+
+        .restart-btn {
+            background: transparent;
+            color: #667eea;
+            border: 2px solid #667eea;
+            padding: 10px 20px;
+            border-radius: 25px;
+            font-size: 1em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 20px;
+        }
+
+        .restart-btn:hover {
+            background: #667eea;
+            color: white;
+        }
+
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-top: 40px;
+            padding-top: 40px;
+            border-top: 1px solid #eee;
+        }
+
+        .feature {
+            text-align: center;
+            padding: 20px;
+        }
+
+        .feature-icon {
+            font-size: 2.5em;
+            color: #667eea;
+            margin-bottom: 15px;
+        }
+
+        .feature h4 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 1.1em;
+        }
+
+        .feature p {
+            color: #666;
+            font-size: 0.9em;
+            line-height: 1.5;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 25px;
+                margin: 10px;
+            }
+
+            .header h1 {
+                font-size: 2em;
+            }
+
+            .features {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
 </head>
 <body>
-  <h1>ATS-Optimized Resume Tailor</h1>
-  {% with messages = get_flashed_messages() %}
-    {% if messages %}
-      <ul style="color:red">
-        {% for m in messages %}<li>{{ m }}</li>{% endfor %}
-      </ul>
-    {% endif %}
-  {% endwith %}
-  <form method="post" enctype="multipart/form-data">
-    <p>
-      <label>Resume (.docx):<br>
-        <input type="file" name="resume" accept=".docx" required>
-      </label>
-    </p>
-    <p>
-      <label>Job Description (.txt):<br>
-        <input type="file" name="jd" accept=".txt" required>
-      </label>
-    </p>
-    <p><button type="submit">Tailor Resume</button></p>
-  </form>
+    <div class="container">
+        <div class="header">
+            <h1>Resume Tailor</h1>
+            <p>AI-powered resume optimization for better job applications. Upload your resume and job description to get an ATS-friendly, tailored version instantly.</p>
+        </div>
+
+        <form id="uploadForm" enctype="multipart/form-data">
+            <div class="upload-section">
+                <h3>📄 Upload Your Resume</h3>
+                <div class="file-upload" onclick="document.getElementById('resumeFile').click()">
+                    <div class="upload-icon">📁</div>
+                    <div class="upload-text">Click or drag your resume here</div>
+                    <div class="upload-hint">Supported format: .docx (Max 16MB)</div>
+                    <input type="file" id="resumeFile" name="resume" accept=".docx" required>
+                </div>
+                <div class="file-info" id="resumeInfo">
+                    <div class="file-name" id="resumeName"></div>
+                    <div class="file-size" id="resumeSize"></div>
+                </div>
+            </div>
+
+            <div class="upload-section">
+                <h3>📋 Upload Job Description</h3>
+                <div class="file-upload" onclick="document.getElementById('jobFile').click()">
+                    <div class="upload-icon">📝</div>
+                    <div class="upload-text">Click or drag job description here</div>
+                    <div class="upload-hint">Supported format: .txt (Max 16MB)</div>
+                    <input type="file" id="jobFile" name="job_description" accept=".txt" required>
+                </div>
+                <div class="file-info" id="jobInfo">
+                    <div class="file-name" id="jobName"></div>
+                    <div class="file-size" id="jobSize"></div>
+                </div>
+            </div>
+
+            <button type="submit" class="process-btn" id="processBtn" disabled>
+                🚀 Tailor My Resume
+            </button>
+        </form>
+
+        <div class="progress-section" id="progressSection">
+            <div class="spinner"></div>
+            <div class="status-message" id="statusMessage">
+                Processing your resume... This may take a few moments.
+            </div>
+        </div>
+
+        <div class="result-section" id="resultSection">
+            <div class="success-icon">✅</div>
+            <h3>Your Resume Has Been Tailored!</h3>
+            <p>Your ATS-optimized resume is ready for download.</p>
+            <a href="#" class="download-btn" id="downloadBtn">📥 Download Resume</a>
+            <br>
+            <button class="restart-btn" onclick="restartProcess()">🔄 Tailor Another Resume</button>
+        </div>
+
+        <div class="error-section" id="errorSection">
+            <div class="error-message" id="errorMessage"></div>
+            <button class="restart-btn" onclick="restartProcess()">🔄 Try Again</button>
+        </div>
+
+        <div class="features">
+            <div class="feature">
+                <div class="feature-icon">🎯</div>
+                <h4>ATS Optimization</h4>
+                <p>Automatically formats your resume to pass through Applicant Tracking Systems</p>
+            </div>
+            <div class="feature">
+                <div class="feature-icon">🔍</div>
+                <h4>Keyword Matching</h4>
+                <p>Intelligently incorporates relevant keywords from the job description</p>
+            </div>
+            <div class="feature">
+                <div class="feature-icon">⚡</div>
+                <h4>Instant Results</h4>
+                <p>Get your tailored resume in minutes, not hours</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // File upload handlers
+        const resumeFile = document.getElementById('resumeFile');
+        const jobFile = document.getElementById('jobFile');
+        const processBtn = document.getElementById('processBtn');
+        const form = document.getElementById('uploadForm');
+
+        // File validation
+        function validateFile(file, type) {
+            const maxSize = 16 * 1024 * 1024; // 16MB
+            const allowedTypes = type === 'resume' ? ['.docx'] : ['.txt'];
+            
+            if (file.size > maxSize) {
+                alert('File size must be less than 16MB');
+                return false;
+            }
+            
+            const extension = '.' + file.name.split('.').pop().toLowerCase();
+            if (!allowedTypes.includes(extension)) {
+                alert(`Please upload a ${allowedTypes.join(' or ')} file`);
+                return false;
+            }
+            
+            return true;
+        }
+
+        // Display file info
+        function displayFileInfo(file, type) {
+            const infoDiv = document.getElementById(type + 'Info');
+            const nameDiv = document.getElementById(type + 'Name');
+            const sizeDiv = document.getElementById(type + 'Size');
+            
+            nameDiv.textContent = file.name;
+            sizeDiv.textContent = `Size: ${(file.size / 1024 / 1024).toFixed(2)} MB`;
+            infoDiv.classList.add('show');
+        }
+
+        // Check if both files are selected
+        function checkFilesSelected() {
+            if (resumeFile.files.length > 0 && jobFile.files.length > 0) {
+                processBtn.disabled = false;
+                processBtn.textContent = '🚀 Tailor My Resume';
+            } else {
+                processBtn.disabled = true;
+                processBtn.textContent = '🚀 Tailor My Resume';
+            }
+        }
+
+        // Resume file change handler
+        resumeFile.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file && validateFile(file, 'resume')) {
+                displayFileInfo(file, 'resume');
+                checkFilesSelected();
+            }
+        });
+
+        // Job file change handler
+        jobFile.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file && validateFile(file, 'job')) {
+                displayFileInfo(file, 'job');
+                checkFilesSelected();
+            }
+        });
+
+        // Drag and drop functionality
+        function setupDragDrop(uploadDiv, fileInput) {
+            uploadDiv.addEventListener('dragover', function(e) {
+                e.preventDefault();
+                uploadDiv.classList.add('dragover');
+            });
+
+            uploadDiv.addEventListener('dragleave', function(e) {
+                e.preventDefault();
+                uploadDiv.classList.remove('dragover');
+            });
+
+            uploadDiv.addEventListener('drop', function(e) {
+                e.preventDefault();
+                uploadDiv.classList.remove('dragover');
+                
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    fileInput.files = files;
+                    fileInput.dispatchEvent(new Event('change'));
+                }
+            });
+        }
+
+        // Setup drag and drop for both upload areas
+        setupDragDrop(document.querySelector('.upload-section:nth-child(1) .file-upload'), resumeFile);
+        setupDragDrop(document.querySelector('.upload-section:nth-child(2) .file-upload'), jobFile);
+
+        // Form submission
+        form.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            // Show progress
+            document.getElementById('progressSection').classList.add('show');
+            processBtn.disabled = true;
+            processBtn.textContent = '⏳ Processing...';
+            
+            // Hide previous results/errors
+            document.getElementById('resultSection').classList.remove('show');
+            document.getElementById('errorSection').classList.remove('show');
+            
+            try {
+                const formData = new FormData(form);
+                
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                // Hide progress
+                document.getElementById('progressSection').classList.remove('show');
+                
+                if (result.success) {
+                    // Show success and download button
+                    document.getElementById('downloadBtn').href = result.download_url;
+                    document.getElementById('resultSection').classList.add('show');
+                } else {
+                    // Show error
+                    document.getElementById('errorMessage').textContent = result.error || 'An error occurred';
+                    document.getElementById('errorSection').classList.add('show');
+                }
+                
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('progressSection').classList.remove('show');
+                document.getElementById('errorMessage').textContent = 'Network error. Please try again.';
+                document.getElementById('errorSection').classList.add('show');
+            }
+            
+            // Reset button
+            processBtn.disabled = false;
+            processBtn.textContent = '🚀 Tailor My Resume';
+        });
+
+        // Restart process
+        function restartProcess() {
+            // Reset form
+            form.reset();
+            
+            // Hide all sections
+            document.getElementById('progressSection').classList.remove('show');
+            document.getElementById('resultSection').classList.remove('show');
+            document.getElementById('errorSection').classList.remove('show');
+            document.getElementById('resumeInfo').classList.remove('show');
+            document.getElementById('jobInfo').classList.remove('show');
+            
+            // Reset button
+            processBtn.disabled = true;
+            processBtn.textContent = '🚀 Tailor My Resume';
+        }
+
+        // Status message updates
+        function updateStatusMessage() {
+            const messages = [
+                'Analyzing your resume...',
+                'Processing job description...',
+                'Matching keywords and skills...',
+                'Optimizing for ATS systems...',
+                'Generating tailored resume...',
+                'Almost done...'
+            ];
+            
+            let index = 0;
+            const statusEl = document.getElementById('statusMessage');
+            
+            const interval = setInterval(function() {
+                if (document.getElementById('progressSection').classList.contains('show')) {
+                    statusEl.textContent = messages[index];
+                    index = (index + 1) % messages.length;
+                } else {
+                    clearInterval(interval);
+                }
+            }, 2000);
+        }
+
+        // Start status updates when progress is shown
+        const progressObserver = new MutationObserver(function(mutations) {
+            mutations.forEach(function(mutation) {
+                if (mutation.target.classList.contains('show')) {
+                    updateStatusMessage();
+                }
+            });
+        });
+
+        progressObserver.observe(document.getElementById('progressSection'), {
+            attributes: true,
+            attributeFilter: ['class']
+        });
+    </script>
 </body>
 </html>
