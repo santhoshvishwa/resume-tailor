@@ -1,81 +1,80 @@
 import os
 from flask import Flask, request, render_template, send_file, flash, redirect, url_for
-import openai
-from openai import RateLimitError
 from docx import Document
 from werkzeug.utils import secure_filename
+from transformers import pipeline
 
-# Load env
-openai.api_key = os.getenv("OPENAI_API_KEY")
-UPLOAD = "uploads"
+# ─── CONFIG ─────────────────────────────────────────────────────────────
+UPLOAD_FOLDER = "uploads"
 ALLOWED = {"docx", "txt"}
 
-os.makedirs(UPLOAD, exist_ok=True)
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-me")
 
-@app.errorhandler(RateLimitError)
-def handle_rate_limit(err):
-    flash("❌ OpenAI quota exceeded. Check billing or API key.")
-    return redirect(url_for('index'))
+# load a local text2text model (small enough for free tier CPU)
+generator = pipeline(
+    "text2text-generation",
+    model="google/flan-t5-base",
+    device=-1  # CPU inference
+)
 
 @app.route('/', methods=['GET','POST'])
 def index():
-    if request.method=='POST':
-        # validate
-        resume = request.files.get('resume')
-        jd     = request.files.get('jd')
-        if not resume or not resume.filename.lower().endswith('.docx'):
-            flash('Upload a .docx resume'); return redirect(url_for('index'))
-        if not jd or not jd.filename.lower().endswith('.txt'):
-            flash('Upload a .txt job description'); return redirect(url_for('index'))
-        # save
-        rfn = secure_filename(resume.filename)
-        jfn = secure_filename(jd.filename)
-        rpath = os.path.join(UPLOAD, rfn)
-        jpath = os.path.join(UPLOAD, jfn)
-        resume.save(rpath); jd.save(jpath)
-        # extract
+    if request.method == 'POST':
+        resume_file = request.files.get('resume')
+        jd_file     = request.files.get('jd')
+        if not resume_file or not resume_file.filename.lower().endswith('.docx'):
+            flash('Please upload a .docx resume')
+            return redirect(url_for('index'))
+        if not jd_file or not jd_file.filename.lower().endswith('.txt'):
+            flash('Please upload a .txt job description')
+            return redirect(url_for('index'))
+
+        # save uploads
+        rfn = secure_filename(resume_file.filename)
+        jfn = secure_filename(jd_file.filename)
+        rpath = os.path.join(UPLOAD_FOLDER, rfn)
+        jpath = os.path.join(UPLOAD_FOLDER, jfn)
+        resume_file.save(rpath)
+        jd_file.save(jpath)
+
+        # extract text
         resume_text = '\n'.join(p.text for p in Document(rpath).paragraphs)
-        jd_text     = open(jpath,'r',encoding='utf-8').read()
-        # prompt
-        prompt = f"""
-You are a professional resume writer. Given the resume paragraphs and the job description, rewrite only the bullet points under each section to:
-- inject keywords from JD, use strong action verbs.
-- preserve all headings, section breaks, and formatting.
-Return new resume text, with paragraphs identical except bullets replaced.
+        jd_text     = open(jpath, 'r', encoding='utf-8').read()
 
-RESUME:
-{resume_text}
-
-JD:
-{jd_text}
-"""
-        resp = openai.chat.completions.create(
-            model="gpt-4o", messages=[{"role":"user","content":prompt}],
-            temperature=0.2, max_tokens=2000
+        # prompt for rewriting bullets only
+        prompt = (
+            "Rewrite only the bullet points in this resume to be ATS-friendly for the job description, "
+            "injecting keywords from the JD and using strong action verbs. "
+            "Preserve all headings, spacing, and non-bullet content intact.\n\n"
+            "Resume:\n" + resume_text + "\n\n"
+            "Job Description:\n" + jd_text
         )
-        new_text = resp.choices[0].message.content
-        # build new doc
-        doc = Document(rpath)
-        # clear all bullets
-        # collect new bullets by splitting new_text
-        lines = new_text.splitlines()
-        bullet_lines = [ln for ln in lines if ln.strip().startswith('- ')]
-        # replace bullets in doc
+
+        # run through transformer model
+        out = generator(prompt, max_length=1500, num_return_sequences=1)[0]['generated_text']
+
+        # rebuild .docx preserving non-bullets
+        original = Document(rpath)
         new_doc = Document()
-        for para in doc.paragraphs:
+        bullets = [ln[2:].strip() for ln in out.splitlines() if ln.strip().startswith('- ')]
+        for para in original.paragraphs:
             style = para.style.name
-            if style.lower().startswith('list') and bullet_lines:
-                txt = bullet_lines.pop(0)[2:].strip()
-                new_doc.add_paragraph(txt, style=style)
+            if style.lower().startswith('list') and bullets:
+                new_doc.add_paragraph(bullets.pop(0), style=style)
             else:
                 p = new_doc.add_paragraph()
-                run = p.add_run(para.text)
                 p.style = style
-        # save
-        out = os.path.join(UPLOAD, f"tailored_{rfn}")
-        new_doc.save(out)
-        return send_file(out, as_attachment=True,
-                         download_name=f"tailored_{rfn}")
+                p.add_run(para.text)
+
+        out_path = os.path.join(UPLOAD_FOLDER, f"tailored_{rfn}")
+        new_doc.save(out_path)
+
+        return send_file(
+            out_path,
+            as_attachment=True,
+            download_name=f"tailored_{rfn}" 
+        )
+
     return render_template('index.html')
