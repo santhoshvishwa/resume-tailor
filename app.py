@@ -2,21 +2,30 @@ import os
 from flask import Flask, request, render_template, send_file, flash, redirect, url_for
 from docx import Document
 from werkzeug.utils import secure_filename
-from transformers import pipeline
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, pipeline
+import torch
 
 # ─── CONFIG ─────────────────────────────────────────────────────────────
 UPLOAD_FOLDER = "uploads"
 ALLOWED = {"docx", "txt"}
-
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-me")
 
-# load a local text2text model (small enough for free tier CPU)
+# Load t5-small at half precision to fit 512MiB RAM
+tokenizer = AutoTokenizer.from_pretrained("t5-small")
+model = AutoModelForSeq2SeqLM.from_pretrained(
+    "t5-small",
+    torch_dtype=torch.float16,
+    low_cpu_mem_usage=True
+)
 generator = pipeline(
     "text2text-generation",
-    model="google/flan-t5-base",
-    device=-1  # CPU inference
+    model=model,
+    tokenizer=tokenizer,
+    device=-1,
+    framework="pt"
 )
 
 @app.route('/', methods=['GET','POST'])
@@ -24,6 +33,7 @@ def index():
     if request.method == 'POST':
         resume_file = request.files.get('resume')
         jd_file     = request.files.get('jd')
+        # Validation
         if not resume_file or not resume_file.filename.lower().endswith('.docx'):
             flash('Please upload a .docx resume')
             return redirect(url_for('index'))
@@ -31,7 +41,7 @@ def index():
             flash('Please upload a .txt job description')
             return redirect(url_for('index'))
 
-        # save uploads
+        # Save uploads
         rfn = secure_filename(resume_file.filename)
         jfn = secure_filename(jd_file.filename)
         rpath = os.path.join(UPLOAD_FOLDER, rfn)
@@ -39,11 +49,11 @@ def index():
         resume_file.save(rpath)
         jd_file.save(jpath)
 
-        # extract text
+        # Extract text
         resume_text = '\n'.join(p.text for p in Document(rpath).paragraphs)
         jd_text     = open(jpath, 'r', encoding='utf-8').read()
 
-        # prompt for rewriting bullets only
+        # Prompt for rewriting bullets only
         prompt = (
             "Rewrite only the bullet points in this resume to be ATS-friendly for the job description, "
             "injecting keywords from the JD and using strong action verbs. "
@@ -52,10 +62,14 @@ def index():
             "Job Description:\n" + jd_text
         )
 
-        # run through transformer model
-        out = generator(prompt, max_length=1500, num_return_sequences=1)[0]['generated_text']
+        # Generate with limited length
+        out = generator(
+            prompt,
+            max_length=512,
+            num_return_sequences=1
+        )[0]['generated_text']
 
-        # rebuild .docx preserving non-bullets
+        # Rebuild docx preserving non-bullets
         original = Document(rpath)
         new_doc = Document()
         bullets = [ln[2:].strip() for ln in out.splitlines() if ln.strip().startswith('- ')]
@@ -71,10 +85,11 @@ def index():
         out_path = os.path.join(UPLOAD_FOLDER, f"tailored_{rfn}")
         new_doc.save(out_path)
 
+        # Return tailored resume
         return send_file(
             out_path,
             as_attachment=True,
-            download_name=f"tailored_{rfn}" 
+            download_name=f"tailored_{rfn}"
         )
 
     return render_template('index.html')
