@@ -1,14 +1,11 @@
 version: '3.8'
-
 services:
-  web:
+  resume-tailor:
     build: .
     ports:
-      - "5000:5000"
+      - '5000:5000'
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-this}
-      - DEBUG=false
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY}
     volumes:
       - ./uploads:/app/uploads
-    restart: unless-stopped
