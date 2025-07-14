@@ -13,3 +13,10 @@ A Flask app that uses a local Hugging Face model to tailor your `.docx` resume f
 ```bash
 docker build -t resume-tailor .
 docker run -p 5000:5000 resume-tailor
+```
+
+## Local Testing (Python)
+```bash
+pip install -r requirements.txt
+python app.py
+```

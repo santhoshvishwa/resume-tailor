@@ -1,5 +1,14 @@
 import os
-from flask import Flask, request, render_template, send_file, flash, redirect, url_for
+from flask import (
+    Flask,
+    request,
+    render_template,
+    send_file,
+    flash,
+    redirect,
+    url_for,
+    after_this_request,
+)
 from docx import Document
 from werkzeug.utils import secure_filename
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, pipeline
@@ -13,18 +22,19 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-me")
 
-# Load t5-small at half precision to fit 512MiB RAM
+# Load t5-small and use half precision only if a GPU is available
 tokenizer = AutoTokenizer.from_pretrained("t5-small")
+use_gpu = torch.cuda.is_available()
 model = AutoModelForSeq2SeqLM.from_pretrained(
     "t5-small",
-    torch_dtype=torch.float16,
+    torch_dtype=torch.float16 if use_gpu else torch.float32,
     low_cpu_mem_usage=True
 )
 generator = pipeline(
     "text2text-generation",
     model=model,
     tokenizer=tokenizer,
-    device=-1,
+    device=0 if use_gpu else -1,
     framework="pt"
 )
 
@@ -50,8 +60,9 @@ def index():
         jd_file.save(jpath)
 
         # Extract text
-        resume_text = '\n'.join(p.text for p in Document(rpath).paragraphs)
-        jd_text     = open(jpath, 'r', encoding='utf-8').read()
+        resume_text = "\n".join(p.text for p in Document(rpath).paragraphs)
+        with open(jpath, 'r', encoding='utf-8') as f:
+            jd_text = f.read()
 
         # Prompt for rewriting bullets only
         prompt = (
@@ -85,6 +96,18 @@ def index():
         out_path = os.path.join(UPLOAD_FOLDER, f"tailored_{rfn}")
         new_doc.save(out_path)
 
+        # Clean up uploaded files
+        os.remove(rpath)
+        os.remove(jpath)
+
+        @after_this_request
+        def remove_generated(response):
+            try:
+                os.remove(out_path)
+            except FileNotFoundError:
+                pass
+            return response
+
         # Return tailored resume
         return send_file(
             out_path,
@@ -93,3 +116,7 @@ def index():
         )
 
     return render_template('index.html')
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
